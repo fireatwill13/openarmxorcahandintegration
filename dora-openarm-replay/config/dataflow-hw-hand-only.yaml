@@ -1,0 +1,38 @@
+# HAND STAGE 2 — LIVE Quest hand-tracking teleop of the ORCA HAND ONLY (fingers).
+#
+# Same source as the arm graph (quest_live_source emits pose_right + fingers_right);
+# here we consume ONLY fingers_right and drive the physical ORCA hand via orca_core
+# over /dev/ttyACM0. NO arm, NO ik. The pose_right output is left unconsumed.
+#
+#   quest-live-source ──fingers_right (16 URDF joint names + rad)──▶ orca-follower
+#        (LEFT hand)                                                  (orca_core, ttyACM0)
+#
+# SAFETY: launches with --no-torque (DRY RUN) — it prints the orca targets each
+# frame and never moves. Confirm the targets are sane, then remove --no-torque
+# from the orca-follower args for the live run. Requires: april in the `dialout`
+# group (port access) and ORCAHAND_DESCRIPTION_DIR exported.
+#
+# Launch (same recipe as the arm):
+#   cd ~/OpenArmDora/openarm/dora-openarm-replay
+#   source ~/orca_teleop/.venv/bin/activate
+#   export ORCAHAND_DESCRIPTION_DIR=$HOME/Documents/orcahand_description
+#   dora run config/dataflow-hw-hand-only.yaml
+# then open the WebXR page in Quest Browser, Start hand tracking, LEFT hand in view.
+
+nodes:
+  - id: quest-live-source
+    path: ../scripts/quest_live_source.py
+    args: "--hand left --quest-port 8765 --gripper 0 --ee-body orcahand_left_L-Carpals_719fff8c --max-reach 0.50 --xml ../models/orcabot_yaw/scene.xml --keyframe home"
+    inputs:
+      tick: dora/timer/millis/33
+    outputs:
+      - pose_right
+      - fingers_right
+
+  - id: orca-follower
+    path: ../scripts/orca_follower.py
+    # DRY RUN first (--no-torque). Drop --no-torque for the live run; add
+    # --max-current <A> to soften the first live motions.
+    args: "--orca-config /home/april/orca_teleop/.venv/lib/python3.12/site-packages/orca_core/models/v2/orcahand_left/config.yaml --side left"
+    inputs:
+      fingers_right: quest-live-source/fingers_right

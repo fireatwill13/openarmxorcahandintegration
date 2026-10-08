@@ -1,0 +1,45 @@
+nodes:
+- id: quest-live-source
+  path: ../scripts/quest_live_source.py
+  args: --hand left --quest-port 8765 --gripper 0 --ee-body orcahand_left_L-Carpals_719fff8c
+    --max-reach 0.50 --xml ../models/orcabot_yaw/scene.xml --keyframe home
+  inputs:
+    tick: dora/timer/millis/33
+  outputs:
+  - pose_right
+  - fingers_right
+- id: ik
+  path: dora-openarm-ik
+  args: --mode left --origin-frame openarm_body_link0 --origin-frame-type body --pos-cost
+    1.0 --ori-cost 0.25 --damping 0.5 --lm-damping 0.4 --posture-cost 0.1 --max-iters
+    5 --dt 0.08 --xml ../models/orcabot_yaw/scene.xml --frame-right orcahand_right_R-Carpals_8d1f1041
+    --frame-type-right body --frame-left orcahand_left_L-Carpals_719fff8c --frame-type-left
+    body
+  inputs:
+    target_left: quest-live-source/pose_right
+  outputs:
+  - position_left
+  - position_right
+  - status
+- id: arm6-adapter
+  path: ../scripts/arm6_from_ik.py
+  inputs:
+    position_left: ik/position_left
+  outputs:
+  - move_position
+- id: follower-left
+  path: dora-openarm
+  args: --side left --config orcabot_arm_driver.yaml --start-on-startup
+  inputs:
+    move_position: arm6-adapter/move_position
+  outputs:
+  - status
+  - position
+  - state
+- id: orca-follower
+  path: ../scripts/orca_follower.py
+  args: --orca-config /home/april/orca_teleop/.venv/lib/python3.12/site-packages/orca_core/models/v2/orcahand_left/config.yaml
+    --side left --wrist
+  inputs:
+    fingers_right: quest-live-source/fingers_right
+    position_left: ik/position_left

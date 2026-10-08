@@ -1,0 +1,73 @@
+# Replay a recorded glove wrist trajectory (MCAP) on the REAL OpenArm V1.
+#
+# Right arm replays the clip; the left follower is included only so its arm
+# is powered and parks at the rest pose (IK never moves it in right mode).
+#
+# Per-run inputs via env (same as sim replay):
+#   REPLAY_MCAP=/path/to/recording.mcap REPLAY_START_SEC=30 REPLAY_END_SEC=40 \
+#   REPLAY_PRE_ROLL_SEC=10 \
+#     uv run dora run config/dataflow-v1-real-replay.yaml --uv
+#
+# !! ARMS MOVE WITHOUT A HUMAN GATE IN THIS DATAFLOW !!
+# On launch: both arms smooth-move to the start pose (elbows 90 deg). Then the
+# right follower creep-aligns onto the clip's first pose during the pre-roll
+# (0.001 rad/step ~ 0.1 rad/s) and tracks the replay 1:1 once aligned; target
+# jumps > 0.1 rad still auto-disengage back to creep. There is no trigger
+# clutch here (no operator) - gripper is commanded closed (motor angle 0),
+# which satisfies the align check immediately. Clear the workspace, e-stop in
+# reach. Set REPLAY_PRE_ROLL_SEC generously (>= 10) on first runs.
+#
+# The clip should start near the robot's start pose (e.g. session
+# 2026-07-22_15-47-57: at t=21s the wrist matches the elbow-90 default pose).
+
+nodes:
+  - id: replayer
+    path: ../scripts/mcap_wrist_replay.py
+    # Input is the fused anatomical WRIST frame and the rot-offset mirrors
+    # dataflow-mujoco-v1-replay.yaml (see comments there): computed from the
+    # t=21s elbow-90 correspondence of session 2026-07-22_15-47-57. Only for
+    # recordings since 2026-07-22 (older fused_wrist topics were the tracker).
+    # --gripper 0 = REAL gripper convention (motor angle, 0 = closed).
+    # Play the clip once (no loop) on the real robot.
+    args: "--calibration frame_calibration.json --rot-offset-euler -85.945 -1.109 81.786 --gripper 0 --no-loop"
+    outputs:
+      - pose_right
+
+  - id: ik
+    build: pip install git+https://github.com/enactic/dora-openarm-kinematics
+    path: dora-openarm-ik
+    args: "--mode right --max-iters 10 --dt 0.1 --damping 0.1 --posture-cost 0.01 --lm-damping 0.01 --xml ../../openarm_mujoco_v1/v1/scene.xml --frame-right openarm_right_link7 --frame-type-right body --frame-left openarm_left_hand_tcp --frame-type-left body"
+    inputs:
+      target_right: replayer/pose_right
+    outputs:
+      - position_left
+      - position_right
+      - status
+
+  - id: follower-right
+    build: pip install git+https://github.com/AprilRoboticsAI/dora-openarm@v1-teleop
+    path: dora-openarm
+    args: "--side right --config ../../dora-openarm-vr/config/openarm_v1_driver.yaml --align-trigger gripper --gripper-open -1.134 --gripper-closed 0 --start-on-startup"
+    inputs:
+      request_state: ik/position_right
+      move_position: ik/position_right
+    outputs:
+      - state
+      - status
+
+  # Powers the left arm and holds it at the driver's elbow-90 start pose.
+  # NOTE: do NOT wire move_position here. In right mode the IK model has no
+  # `home` keyframe, so ik/position_left is the all-zeros default config
+  # (elbow straight, arm down) — driving the left follower to it makes the
+  # arm creep down into the table. With no move_position, --start-on-startup
+  # parks the arm at the elbow-90 start pose and it stays there; request_state
+  # keeps it powered and reporting state.
+  - id: follower-left
+    build: pip install git+https://github.com/AprilRoboticsAI/dora-openarm@v1-teleop
+    path: dora-openarm
+    args: "--side left --config ../../dora-openarm-vr/config/openarm_v1_driver.yaml --start-on-startup"
+    inputs:
+      request_state: ik/position_left
+    outputs:
+      - state
+      - status

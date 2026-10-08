@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+
+# dora run-session artifacts
+config/out/
+.DS_Store
+config/MUJOCO_LOG.TXT

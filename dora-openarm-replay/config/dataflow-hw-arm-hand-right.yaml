@@ -1,0 +1,69 @@
+# RIGHT-SIDE bring-up — LIVE Quest teleop of the RIGHT OpenArm (6 CAN motors on can0)
+# + RIGHT ORCA hand (Feetech). Mirror of dataflow-hw-arm-hand.yaml for the right side.
+#
+#   quest-live-source(--hand right) ─pose_right──▶ ik(--mode right) ─position_right─┬▶ arm6-adapter(--side right) ─▶ follower-right (can0)
+#                                   └─fingers_right─────────────────────────────────┴▶ orca-follower(--side right, wrist from position_right)
+#
+# PRE-LAUNCH (once the RIGHT arm + hand are physically mounted):
+#   1. Bring up can0 as CAN-FD to match can1 (it's currently DOWN + classic-CAN):
+#        sudo ip link set can0 type can bitrate 1000000 dbitrate 5000000 fd on
+#        sudo ip link set can0 up
+#   2. Fix the RIGHT hand config port — it ships a macOS path (/dev/cu.usbmodem1101).
+#      With BOTH hands plugged, use a stable by-id path so left/right can't swap:
+#        ls -l /dev/serial/by-id/
+#      then set `port:` (and `baudrate: 1000000`) in
+#        orca_core/models/v2/orcahand_right/config.yaml
+#   3. Re-measure the RIGHT arm start pose into orcabot_arm_driver.yaml `start`/`stop`
+#      right_arm block (so follower-right holds still at launch, not lurch to placeholder).
+#
+# Launch:
+#   cd ~/OpenArmDora/openarm/dora-openarm-replay && source ~/orca_teleop/.venv/bin/activate
+#   export ORCAHAND_DESCRIPTION_DIR=$HOME/Documents/orcahand_description
+#   dora run config/dataflow-hw-arm-hand-right.yaml
+
+nodes:
+  - id: quest-live-source
+    path: ../scripts/quest_live_source.py
+    args: "--hand right --quest-port 8765 --gripper 0 --ee-body orcahand_right_R-Carpals_8d1f1041 --max-reach 0.50 --xml ../models/orcabot_yaw/scene.xml --keyframe home"
+    inputs:
+      tick: dora/timer/millis/33
+    outputs:
+      - pose_right
+      - fingers_right
+
+  - id: ik
+    path: dora-openarm-ik
+    args: "--mode right --origin-frame openarm_body_link0 --origin-frame-type body --pos-cost 1.0 --ori-cost 0.25 --damping 0.5 --lm-damping 0.4 --posture-cost 0.1 --max-iters 5 --dt 0.08 --xml ../models/orcabot_yaw/scene.xml --frame-right orcahand_right_R-Carpals_8d1f1041 --frame-type-right body --frame-left orcahand_left_L-Carpals_719fff8c --frame-type-left body"
+    inputs:
+      target_right: quest-live-source/pose_right
+    outputs:
+      - position_left
+      - position_right
+      - status
+
+  - id: arm6-adapter
+    path: ../scripts/arm6_from_ik.py
+    args: "--side right"
+    inputs:
+      position_right: ik/position_right
+    outputs:
+      - move_position
+
+  - id: follower-right
+    path: dora-openarm
+    # RIGHT arm = 6 CAN motors on can0. Torque on at launch (re-measure start pose first!).
+    args: "--side right --config orcabot_arm_driver.yaml --start-on-startup"
+    inputs:
+      move_position: arm6-adapter/move_position
+    outputs:
+      - status
+      - position
+      - state
+
+  - id: orca-follower
+    path: ../scripts/orca_follower.py
+    # RIGHT ORCA hand. FIX THE PORT in orcahand_right/config.yaml first (macOS path shipped).
+    args: "--orca-config /home/april/orca_teleop/.venv/lib/python3.12/site-packages/orca_core/models/v2/orcahand_right/config.yaml --side right --wrist"
+    inputs:
+      fingers_right: quest-live-source/fingers_right
+      position_right: ik/position_right

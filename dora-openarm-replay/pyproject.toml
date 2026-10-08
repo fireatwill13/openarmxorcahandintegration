@@ -1,0 +1,27 @@
+# April Robotics workspace: MCAP trajectory replay + frame calibration for
+# OpenArm V1. Not a package — just the dependency set for the node scripts
+# and dataflows in this directory (dora nodes run via `path:`).
+#
+# Versions mirror ../dora-openarm-vr/pyproject.toml where shared; mujoco is
+# a direct import of solve_frame.py (elsewhere it only arrives transitively
+# via the pip-from-git node installs at `dora build` time).
+
+[project]
+name = "dora-openarm-replay"
+version = "0.1.0"
+description = "OpenArm V1 wrist-trajectory replay (MCAP) and AprilTag frame calibration"
+authors = [{name = "AprilRoboticsAI"}]
+license = {text = "Apache-2.0"}
+requires-python = ">=3.11"
+dependencies = [
+    "dora-rs==0.5.0",
+    "dora-rs-cli==0.5.0",
+    "mcap>=1.4.0",
+    "mujoco>=3.0.0",
+    "numpy>=2.4.4",
+    "pyarrow>=23.0.1",
+    "scipy>=1.17.1",
+]
+
+[tool.uv]
+package = false

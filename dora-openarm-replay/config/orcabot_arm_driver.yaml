@@ -1,0 +1,118 @@
+joint_limits:
+  left_arm:
+  - - -1.309
+    - 1.309
+  - - -1.5708
+    - 0.1571
+  - - -1.4835
+    - 1.4835
+  - - 0.0
+    - 2.3562
+  - - -1.4835
+    - 1.4835
+  - - -1.4835
+    - 1.4835
+  right_arm:
+  - - -1.309
+    - 1.309
+  - - -0.1571
+    - 1.5708
+  - - -1.4835
+    - 1.4835
+  - - 0.0
+    - 2.3562
+  - - -1.4835
+    - 1.4835
+  - - -1.4835
+    - 1.4835
+joint_offsets:
+  left_arm:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  right_arm:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+joint_delta_position_limits:
+- 0.2
+- 0.2
+- 0.2
+- 0.2
+- 0.2
+- 0.2
+can_interface:
+  left_arm: can1
+  right_arm: can0
+motor_config:
+  types:
+  - DM8009
+  - DM8009
+  - DM4340
+  - DM4340
+  - DM4310
+  - DM4310
+  send_ids:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  recv_ids:
+  - 17
+  - 18
+  - 19
+  - 20
+  - 21
+  - 22
+gripper_posforce: false
+control_gains:
+  kps:
+  - 70.0
+  - 70.0
+  - 70.0
+  - 60.0
+  - 10.0
+  - 10.0
+  kds:
+  - 2.75
+  - 2.5
+  - 2.0
+  - 2.0
+  - 0.7
+  - 0.6
+start:
+  moves:
+  - name: hold_current
+    position:
+      left_arm: &id001
+      - -0.2043
+      - -0.0895
+      - -0.0261
+      - 0.9894
+      - -0.3824
+      - -0.1989
+      right_arm: &id002
+      - 0.2768
+      - 0.0025
+      - -0.1806
+      - 0.8375
+      - 0.2901
+      - -0.1886
+    hz: 50
+    duration: 2
+stop:
+  moves:
+  - name: hold_current
+    position:
+      left_arm: *id001
+      right_arm: *id002
+    hz: 50
+    duration: 2

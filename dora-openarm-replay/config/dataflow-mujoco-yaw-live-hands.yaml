@@ -1,0 +1,62 @@
+# LIVE Meta Quest hand-tracking teleop on the orcabot_yaw embodiment
+# (OpenArm arm + ORCA hand), arm IK + finger retargeting — NO controllers.
+#
+# Same graph as dataflow-mujoco-yaw-replay-hands.yaml, but the `replayer`
+# (recorded MCAP wrist + precomputed finger sidecar) is replaced by
+# `quest-live-source`, which reads live Quest hand tracking over WebXR and
+# emits the SAME two streams (pose_right + fingers_right). `ik` and
+# `mujoco-viewer` are unchanged from the replay-hands graph.
+#
+# ENV NOTE: unlike the replay dataflow (which quarantines torch/pinocchio out
+# of its venv and precomputes fingers offline), the LIVE retargeter runs
+# in-process, so this dataflow's venv MUST contain the orca-retarget stack
+# (orca_teleop[adaptive] + orca_core + torch/pin/nlopt) AND aiohttp, on top of
+# dora-rs + pyarrow + mujoco. See the workspace notes for the combined venv.
+#
+# Run:
+#   uv run dora build config/dataflow-mujoco-yaw-live-hands.yaml --uv
+#   uv run dora run   config/dataflow-mujoco-yaw-live-hands.yaml --uv
+# then open the printed WebXR URL in Quest Browser and tap "Start hand tracking".
+
+nodes:
+  - id: quest-live-source
+    path: ../scripts/quest_live_source.py
+    # env provisioned in the run venv (see ENV NOTE); no build: here because
+    # orca-retarget's deps resolve to local path-deps, handled at setup time.
+    # LEFT hand. (Output channels are still named *_right for now — cosmetic;
+    # the content is left-hand data because --hand left drives the left
+    # retargeter + left EE FK. Rename to *_left when we go bimanual.)
+    args: "--hand left --quest-port 8765 --gripper 0 --ee-body orcahand_left_L-Carpals_719fff8c --max-reach 0.50 --xml ../models/orcabot_yaw/scene.xml --keyframe home"
+    inputs:
+      # drives the poll loop at ~30 Hz — without a tick the node never reads the
+      # WebXR bridge (the replayer was self-timed; this node is tick-driven).
+      tick: dora/timer/millis/33
+    outputs:
+      - pose_right
+      - fingers_right
+
+  - id: ik
+    # dora-openarm-ik is pre-installed in the run venv (uv-venvs have no pip, so
+    # `dora build`'s pip-install can't run here). --origin-frame points the IK
+    # root at orcabot's base body (the model has no `arm_origin` site that newer
+    # dora-openarm-kinematics defaults to).
+    path: dora-openarm-ik
+    # anti-flail tuning: posture anchors the elbow (redundant DOF), higher
+    # damping/lm-damping smooth motion + stabilize singularities, lower dt takes
+    # smaller steps, ori-cost de-weighted so it prioritizes hand position.
+    # (all tunable starting points)
+    args: "--mode left --origin-frame openarm_body_link0 --origin-frame-type body --pos-cost 1.0 --ori-cost 0.25 --damping 0.5 --lm-damping 0.4 --posture-cost 0.1 --max-iters 5 --dt 0.08 --xml ../models/orcabot_yaw/scene.xml --frame-right orcahand_right_R-Carpals_8d1f1041 --frame-type-right body --frame-left orcahand_left_L-Carpals_719fff8c --frame-type-left body"
+    inputs:
+      target_left: quest-live-source/pose_right
+    outputs:
+      - position_left
+      - position_right
+      - status
+
+  - id: mujoco-viewer
+    path: ../scripts/mujoco_viewer_hand.py
+    args: "--xml ../models/orcabot_yaw/scene.xml --keyframe home"
+    inputs:
+      position_left:  ik/position_left
+      position_right: ik/position_right
+      fingers_right:  quest-live-source/fingers_right

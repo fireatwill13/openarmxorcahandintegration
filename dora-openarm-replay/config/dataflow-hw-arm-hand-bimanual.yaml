@@ -1,0 +1,89 @@
+# BIMANUAL — LIVE Quest teleop of BOTH OpenArms + BOTH ORCA hands from ONE headset.
+#
+#   quest-live-source(--hand both)
+#     ├ pose_left ─▶ ik(--mode bimanual) ─ position_left ─▶ arm6-left ─▶ follower-left  (can1)
+#     ├ pose_right ─▶      "             ─ position_right ─▶ arm6-right ─▶ follower-right (can0)
+#     ├ fingers_left  ─▶ orca-left  (--side left,  fingers_left,  wrist from position_left)
+#     └ fingers_right ─▶ orca-right (--side right, fingers_right, wrist from position_right)
+#
+# Prereqs (all already done for left+right solo): can0+can1 up (FD), both hand
+# calibrations present, both arm start poses re-measured, hand ports by-id.
+# Launch:
+#   cd ~/OpenArmDora/openarm/dora-openarm-replay && source ~/orca_teleop/.venv/bin/activate
+#   export ORCAHAND_DESCRIPTION_DIR=$HOME/Documents/orcahand_description
+#   dora run config/dataflow-hw-arm-hand-bimanual.yaml
+# then Quest: Start hand tracking with BOTH hands in view. BOTH arm e-stops + both
+# hand power switches in reach — this is the largest simultaneous motion.
+
+nodes:
+  - id: quest-live-source
+    path: ../scripts/quest_live_source.py
+    args: "--hand both --quest-port 8765 --gripper 0 --ee-body-left orcahand_left_L-Carpals_719fff8c --ee-body-right orcahand_right_R-Carpals_8d1f1041 --max-reach 0.50 --xml ../models/orcabot_yaw/scene.xml --keyframe home"
+    inputs:
+      tick: dora/timer/millis/33
+    outputs:
+      - pose_left
+      - pose_right
+      - fingers_left
+      - fingers_right
+
+  - id: ik
+    path: dora-openarm-ik
+    args: "--mode bimanual --origin-frame openarm_body_link0 --origin-frame-type body --pos-cost 1.0 --ori-cost 0.25 --damping 0.5 --lm-damping 0.4 --posture-cost 0.1 --max-iters 5 --dt 0.08 --xml ../models/orcabot_yaw/scene.xml --frame-right orcahand_right_R-Carpals_8d1f1041 --frame-type-right body --frame-left orcahand_left_L-Carpals_719fff8c --frame-type-left body"
+    inputs:
+      target_left: quest-live-source/pose_left
+      target_right: quest-live-source/pose_right
+    outputs:
+      - position_left
+      - position_right
+      - status
+
+  - id: arm6-left
+    path: ../scripts/arm6_from_ik.py
+    args: "--side left"
+    inputs:
+      position_left: ik/position_left
+    outputs:
+      - move_position
+
+  - id: arm6-right
+    path: ../scripts/arm6_from_ik.py
+    args: "--side right"
+    inputs:
+      position_right: ik/position_right
+    outputs:
+      - move_position
+
+  - id: follower-left
+    path: dora-openarm
+    args: "--side left --config orcabot_arm_driver.yaml --start-on-startup"
+    inputs:
+      move_position: arm6-left/move_position
+    outputs:
+      - status
+      - position
+      - state
+
+  - id: follower-right
+    path: dora-openarm
+    args: "--side right --config orcabot_arm_driver.yaml --start-on-startup"
+    inputs:
+      move_position: arm6-right/move_position
+    outputs:
+      - status
+      - position
+      - state
+
+  - id: orca-left
+    path: ../scripts/orca_follower.py
+    args: "--orca-config /home/april/orca_teleop/.venv/lib/python3.12/site-packages/orca_core/models/v2/orcahand_left/config.yaml --side left --wrist --fingers-input fingers_left"
+    inputs:
+      fingers_left: quest-live-source/fingers_left
+      position_left: ik/position_left
+
+  - id: orca-right
+    path: ../scripts/orca_follower.py
+    args: "--orca-config /home/april/orca_teleop/.venv/lib/python3.12/site-packages/orca_core/models/v2/orcahand_right/config.yaml --side right --wrist --fingers-input fingers_right"
+    inputs:
+      fingers_right: quest-live-source/fingers_right
+      position_right: ik/position_right

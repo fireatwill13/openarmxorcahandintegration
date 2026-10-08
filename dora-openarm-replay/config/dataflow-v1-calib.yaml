@@ -1,0 +1,103 @@
+# REAL OpenArm V1 teleop + frame CALIBRATION (world/AprilTag -> robot body).
+#
+# Same as dataflow-v1-real.yaml plus a corner-capture node: teleop the RIGHT
+# gripper tip to each of the 4 tag corners and press A to log the measured
+# right-arm joint vector (from follower-right/state). Then run solve_frame.py.
+# Stop with B+Y as usual.
+#
+# Same receiver + IK as dataflow-mujoco-v1.yaml; the MuJoCo node is replaced
+# by one dora-openarm follower per arm (CAN via openarm_driver, config in
+# openarm_v1_driver.yaml).
+#
+# Gripper on the REAL robot is the J8 motor angle: -1.134 rad (open, -65 deg)
+# .. 0 rad (closed) on BOTH arms - NOT the MJCF slide value used in sim.
+#
+# Safety chain: driver joint/velocity/torque limits + follower align clutch
+# (arm only follows after the trigger is >90% pulled, then creeps to your
+# hand pose at 0.001 rad/step before going transparent; any target jump
+# > --align-threshold disengages back to creep). There is NO inter-arm
+# collision avoidance - keep the workspace clear and an e-stop in reach.
+#
+# First power-on checklist: see the workspace README ("Real robot" section).
+
+nodes:
+  - id: quit-button
+    path: ../../dora-openarm-vr/scripts/quit_button.py
+    inputs:
+      button_b: udp-receiver/button_b
+      button_y: udp-receiver/button_y
+    outputs:
+      - command
+  - id: quittable-tick-leader
+    build: pip install git+https://github.com/enactic/dora-openarm-quitter.git
+    path: dora-openarm-quitter
+    inputs:
+      command: quit-button/command
+      tick: dora/timer/millis/2
+    outputs:
+      - tick
+  - id: udp-receiver
+    build: pip install -e ../../dora-openarm-vr
+    path: dora-openarm-quest-receiver
+    args: "--host 0.0.0.0 --port 5006 --frame-offset -0.085 0 0.558 --rot-fix-euler 180 0 90 --gripper-open-right -1.134 --gripper-closed-right 0 --gripper-open-left -1.134 --gripper-closed-left 0"
+    inputs:
+      tick: quittable-tick-leader/tick
+    outputs:
+      - pose_right
+      - trigger_right
+      - grip_right
+      - pose_left
+      - pose_reference
+      - trigger_left
+      - grip_left
+      - joystick_x_left
+      - joystick_y_left
+      - joystick_x_right
+      - joystick_y_right
+      - button_a
+      - button_b
+      - button_x
+      - button_y
+      - status
+  - id: ik
+    build: pip install git+https://github.com/enactic/dora-openarm-kinematics
+    path: dora-openarm-ik
+    args: "--mode bimanual --max-iters 10 --dt 0.1 --damping 0.1 --posture-cost 0.01 --lm-damping 0.01 --xml ../../openarm_mujoco_v1/v1/scene.xml --frame-right openarm_right_hand_tcp --frame-type-right body --frame-left openarm_left_hand_tcp --frame-type-left body"
+    inputs:
+      tick: quittable-tick-leader/tick
+      target_right: udp-receiver/pose_right
+      target_left:  udp-receiver/pose_left
+      trigger_right: udp-receiver/trigger_right
+      trigger_left:  udp-receiver/trigger_left
+    outputs:
+      - position_left
+      - position_right
+      - status
+
+  - id: follower-right
+    build: pip install git+https://github.com/AprilRoboticsAI/dora-openarm@v1-teleop
+    path: dora-openarm
+    args: "--side right --config ../../dora-openarm-vr/config/openarm_v1_driver.yaml --align-trigger gripper --gripper-open -1.134 --gripper-closed 0 --start-on-startup"
+    inputs:
+      request_state: ik/position_right
+      move_position: ik/position_right
+    outputs:
+      - state
+      - status
+
+  - id: follower-left
+    build: pip install git+https://github.com/AprilRoboticsAI/dora-openarm@v1-teleop
+    path: dora-openarm
+    args: "--side left --config ../../dora-openarm-vr/config/openarm_v1_driver.yaml --align-trigger gripper --gripper-open -1.134 --gripper-closed 0 --start-on-startup"
+    inputs:
+      request_state: ik/position_left
+      move_position: ik/position_left
+    outputs:
+      - state
+      - status
+
+  - id: corner-capture
+    path: ../scripts/corner_capture.py
+    inputs:
+      state: follower-right/state
+      capture: udp-receiver/button_a

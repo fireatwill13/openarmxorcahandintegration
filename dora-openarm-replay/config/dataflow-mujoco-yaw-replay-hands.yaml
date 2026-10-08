@@ -1,0 +1,46 @@
+# Replay a recorded glove trajectory (MCAP) on the orcabot_yaw embodiment
+# with WRIST POSE TRACKING (arm IK) + FINGER RETARGETING.
+#
+# Same graph as dataflow-mujoco-yaw-replay.yaml plus a fingers_right stream:
+# the replayer publishes retargeted finger joints from a precomputed sidecar
+# (generated OFFLINE in the orca-retarget venv — torch/pinocchio/nlopt never
+# enter this dataflow's environment):
+#
+#   cd ../orca-retarget && uv run python -m orca_retarget.offline_cli \
+#     --mcap ~/based/DataInfra/recordings/<session>.fused.mcap
+#
+# The viewer is the April-local mujoco_viewer_hand.py: the stock enactic
+# viewer can only write 7 arm joints + gripper per side, so finger qpos
+# needs a local node (kinematic display, same qpos mode as stock).
+#
+# Per-run inputs via env:
+#   REPLAY_MCAP=...fused.mcap REPLAY_FINGERS=...fused.fingers_right.npz \
+#   REPLAY_START_SEC=20 REPLAY_END_SEC=40 \
+#     uv run dora run config/dataflow-mujoco-yaw-replay-hands.yaml --uv
+
+nodes:
+  - id: replayer
+    path: ../scripts/mcap_wrist_replay.py
+    args: "--calibration frame_calibration.json --rot-offset-euler -50.307 85.797 156.518 --gripper 0"
+    outputs:
+      - pose_right
+      - fingers_right
+
+  - id: ik
+    build: pip install git+https://github.com/enactic/dora-openarm-kinematics
+    path: dora-openarm-ik
+    args: "--mode right --max-iters 10 --dt 0.1 --damping 0.1 --posture-cost 0.01 --lm-damping 0.01 --xml ../models/orcabot_yaw/scene.xml --frame-right orcahand_right_R-Carpals_8d1f1041 --frame-type-right body --frame-left orcahand_left_L-Carpals_719fff8c --frame-type-left body"
+    inputs:
+      target_right: replayer/pose_right
+    outputs:
+      - position_left
+      - position_right
+      - status
+
+  - id: mujoco-viewer
+    path: ../scripts/mujoco_viewer_hand.py
+    args: "--xml ../models/orcabot_yaw/scene.xml --keyframe home"
+    inputs:
+      position_left:  ik/position_left
+      position_right: ik/position_right
+      fingers_right:  replayer/fingers_right

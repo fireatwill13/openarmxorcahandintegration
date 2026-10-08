@@ -1,0 +1,67 @@
+# STAGE 3 — LIVE Quest hand-tracking teleop of the ORCABOT ARM ONLY (6 CAN motors).
+#
+# Same front half as the sim graph (dataflow-mujoco-yaw-live-hands.yaml): the
+# Quest wrist pose drives the arm IK. The back half swaps the MuJoCo viewer for
+# real hardware:
+#
+#   quest-live-source ──pose_right──▶ ik ──position_left(8)──▶ arm6-adapter
+#        (LEFT wrist)                (orcabot_yaw)                    │
+#                                                          move_position(6 = J1-6)
+#                                                                     ▼
+#                                                       follower-left (dora-openarm)
+#                                                        --config orcabot_arm_driver.yaml
+#                                                                 CAN can1
+#
+# The ORCA HAND IS NOT DRIVEN here (arm-alone test): joint7 (wrist-flex) + the 16
+# fingers live on the Feetech bus and nothing in this graph touches them. The
+# source still emits fingers_right; it is intentionally left unconsumed.
+#
+# SAFETY: `--start-on-startup` means TORQUE COMES ON THE MOMENT THIS DATAFLOW
+# LAUNCHES. Because the driver's start pose == the measured current pose, torque-on
+# holds still; then the follower's align creeps (0.001 rad/step) from the current
+# pose toward the first IK target before switching to 1:1 tracking. Be at the
+# E-STOP when you launch. Ctrl-C -> follower stop() -> arm smooth-moves to the
+# stop pose (== current) then torque off.
+#
+# Run (from ~/OpenArmDora/openarm/dora-openarm-replay):
+#   uv run dora run config/dataflow-hw-arm-only.yaml --uv
+# then open the printed WebXR URL in Quest Browser, tap "Start hand tracking",
+# use your LEFT hand held still ~0.5s to calibrate home.
+
+nodes:
+  - id: quest-live-source
+    path: ../scripts/quest_live_source.py
+    args: "--hand left --quest-port 8765 --gripper 0 --ee-body orcahand_left_L-Carpals_719fff8c --max-reach 0.50 --xml ../models/orcabot_yaw/scene.xml --keyframe home"
+    inputs:
+      tick: dora/timer/millis/33
+    outputs:
+      - pose_right
+      - fingers_right
+
+  - id: ik
+    path: dora-openarm-ik
+    args: "--mode left --origin-frame openarm_body_link0 --origin-frame-type body --pos-cost 1.0 --ori-cost 0.25 --damping 0.5 --lm-damping 0.4 --posture-cost 0.1 --max-iters 5 --dt 0.08 --xml ../models/orcabot_yaw/scene.xml --frame-right orcahand_right_R-Carpals_8d1f1041 --frame-type-right body --frame-left orcahand_left_L-Carpals_719fff8c --frame-type-left body"
+    inputs:
+      target_left: quest-live-source/pose_right
+    outputs:
+      - position_left
+      - position_right
+      - status
+
+  - id: arm6-adapter
+    path: ../scripts/arm6_from_ik.py
+    inputs:
+      position_left: ik/position_left
+    outputs:
+      - move_position
+
+  - id: follower-left
+    path: dora-openarm
+    # 6-motor arm on can1. No gripper => no --align-trigger. Torque on at launch.
+    args: "--side left --config orcabot_arm_driver.yaml --start-on-startup"
+    inputs:
+      move_position: arm6-adapter/move_position
+    outputs:
+      - status
+      - position
+      - state

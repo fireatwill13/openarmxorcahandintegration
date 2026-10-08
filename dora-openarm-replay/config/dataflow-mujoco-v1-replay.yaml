@@ -1,0 +1,62 @@
+# Replay a recorded glove wrist trajectory (MCAP) on OpenArm V1 in MuJoCo.
+#
+# mcap_wrist_replay.py publishes right-wrist IK targets (robot base frame,
+# eef convention) with the recording's original pacing; IK runs right-arm
+# only; the left arm stays at its rest pose.
+#
+# Per-run inputs (file, clip window, hand) come from REPLAY_* env vars —
+# see the replayer node below.
+
+nodes:
+  - id: replayer
+    path: ../scripts/mcap_wrist_replay.py
+    # Per-run inputs come from the environment (see mcap_wrist_replay.py):
+    #   REPLAY_MCAP=/path/to/recording.mcap REPLAY_START_SEC=30 REPLAY_END_SEC=40 \
+    #     uv run dora run config/dataflow-mujoco-v1-replay.yaml --uv
+    # (REPLAY_TOPIC selects the hand; default /hand/right/fused_wrist_pose_world)
+    #
+    # Input is the fused anatomical WRIST frame (topic default
+    # /hand/right/fused_wrist_pose_world). Recordings since 2026-07-22 carry
+    # the raw tracker separately as /hand/*/tracker_pose_world; the wrist
+    # frame is NOT rigid to the tracker (relative rotation swings ~30 deg
+    # over a clip), so tracker-calibrated offsets do not apply to it.
+    # rot-offset computed from the t=21s correspondence of session
+    # 2026-07-22_15-47-57 (wrist held at the robot's elbow-90 default pose):
+    # R_offset = R_base_wrist(21s)^-1 * R_link7(elbow90).
+    # ~9 deg from the clean convention euler xyz (-90, 0, 90) = rotate -90
+    # about wrist y then -90 about original wrist x; both track identically
+    # (0.01 deg mean orientation error over the full clip).
+    # The clip loops until Ctrl+C (--loop is the default; pass --no-loop to
+    # play once and shut the dataflow down instead).
+    args: "--calibration frame_calibration.json --rot-offset-euler -85.945 -1.109 81.786"
+    outputs:
+      - pose_right
+
+  - id: ik
+    build: pip install git+https://github.com/enactic/dora-openarm-kinematics
+    path: dora-openarm-ik
+    # Tracked frame is configurable via --frame-right/--frame-type-right.
+    # openarm_right_link7 = wrist flange (last arm motor, before the gripper):
+    # matches where the human wrist tracker sits and avoids the ~18cm gripper
+    # lever that forced hard poses near the body (4.1mm/0.0deg mean tracking
+    # vs 6.1mm/0.1deg with hand_tcp). NOTE: if you change the frame, recompute
+    # the replayer's --rot-offset-euler against the new frame's elbow-90
+    # attitude (here it is identical, since link7..hand_tcp share orientation).
+    args: "--mode right --max-iters 10 --dt 0.1 --damping 0.1 --posture-cost 0.01 --lm-damping 0.01 --xml ../../openarm_mujoco_v1/v1/scene.xml --frame-right openarm_right_link7 --frame-type-right body --frame-left openarm_left_hand_tcp --frame-type-left body"
+    inputs:
+      target_right: replayer/pose_right
+    outputs:
+      - position_left
+      - position_right
+      - status
+
+  - id: mujoco-viewer
+    build: pip install git+https://github.com/enactic/dora-openarm-mujoco
+    path: dora-openarm-mujoco
+    args: "--xml ../../openarm_mujoco_v1/v1/scene.xml --viewer --debug-frames"
+    inputs:
+      position_left:  ik/position_left
+      position_right: ik/position_right
+      pose_right:     replayer/pose_right
+    outputs:
+      - status
